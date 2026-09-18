@@ -8,7 +8,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -70,10 +69,10 @@ public class MainActivity extends Activity {
         appHeader.setPadding(0, 0, 0, 30);
         root.addView(appHeader);
 
-        // Синяя информационная панель
+        // Синяя информационная панель PdaNet
         LinearLayout infoBox = new LinearLayout(this);
         infoBox.setOrientation(LinearLayout.VERTICAL);
-        infoBox.setBackgroundColor(Color.parseColor("#0072C6")); // PdaNet Blue
+        infoBox.setBackgroundColor(Color.parseColor("#0072C6"));
         infoBox.setPadding(30, 30, 30, 30);
 
         tvTitle = new TextView(this);
@@ -153,39 +152,68 @@ public class MainActivity extends Activity {
         connectedClientIp = "Ожидание ПК...";
         btnToggle.setText("ОСТАНОВИТЬ");
         btnToggle.setBackgroundColor(Color.RED);
-        tvSsid.setText("Запуск заводской сети...");
+        tvSsid.setText("Инициализация сети чипом...");
 
-        // 1. Создаем сеть заводским методом (как PdaNet)
+        // 1. Создаем заводскую сеть Wi-Fi Direct
         startNativeWifiDirect();
 
-        // 2. Запускаем высокоскоростной сервер
+        // 2. Запускаем сервер
         startProxyServer();
     }
 
     private void startNativeWifiDirect() {
-        if (p2pManager == null || p2pChannel == null) return;
+        if (p2pManager == null || p2pChannel == null) {
+            tvSsid.setText("Ошибка: Wi-Fi чип недоступен");
+            return;
+        }
 
-        // Создаем группу БЕЗ принудительного конфига (чтобы чип сам включил маяк)
+        // 1. Сбрасываем старые зависшие группы перед новым стартом
+        p2pManager.removeGroup(p2pChannel, new WifiP2pManager.ActionListener() {
+            @Override
+            public void onSuccess() { createActualGroup(); }
+            @Override
+            public void onFailure(int reason) { createActualGroup(); }
+        });
+    }
+
+    private void createActualGroup() {
+        // 2. Создаем новую заводскую группу
         p2pManager.createGroup(p2pChannel, new WifiP2pManager.ActionListener() {
             @Override
             public void onSuccess() {
-                // Считываем заводское имя и пароль (как PdaNet)
-                p2pManager.requestGroupInfo(p2pChannel, new WifiP2pManager.GroupInfoListener() {
-                    @Override
-                    public void onGroupInfoAvailable(WifiP2pGroup group) {
-                        if (group != null) {
-                            tvSsid.setText("Имя: " + group.getNetworkName());
-                            tvPass.setText("Пароль: " + group.getPassphrase());
-                        }
-                    }
-                });
+                tvSsid.setText("Сеть создается чипом...");
+                // Даем 1-2 секунды чипу сгенерировать имя и пароль, затем считываем
+                queryGroupInfoWithRetry(0);
             }
 
             @Override
             public void onFailure(int reason) {
-                tvSsid.setText("Сбой создания группы: " + reason);
+                String error = "Сбой создания: код " + reason;
+                if (reason == 2) error = "Сбой: Wi-Fi занят (выключите и включите Wi-Fi)";
+                tvSsid.setText(error);
             }
         });
+    }
+
+    // Опрашиваем систему каждые 800мс, пока чип не выдаст имя и пароль
+    private void queryGroupInfoWithRetry(int attempt) {
+        if (!isRunning) return;
+
+        uiHandler.postDelayed(() -> {
+            p2pManager.requestGroupInfo(p2pChannel, new WifiP2pManager.GroupInfoListener() {
+                @Override
+                public void onGroupInfoAvailable(WifiP2pGroup group) {
+                    if (group != null && group.getNetworkName() != null) {
+                        tvSsid.setText("Имя: " + group.getNetworkName());
+                        tvPass.setText("Пароль: " + group.getPassphrase());
+                    } else if (attempt < 8 && isRunning) {
+                        queryGroupInfoWithRetry(attempt + 1);
+                    } else {
+                        tvSsid.setText("Сеть активна (проверьте список сетей ПК)");
+                    }
+                }
+            });
+        }, 800);
     }
 
     private void stopAll() {
@@ -307,7 +335,7 @@ public class MainActivity extends Activity {
                             offset += 2;
 
                             int payloadLen = packet.getLength() - offset;
-                            bytesOut.addAndGet(payloadLen); // Считаем исходящий трафик
+                            bytesOut.addAndGet(payloadLen);
                             DatagramPacket outPkt = new DatagramPacket(buf, offset, payloadLen, targetAddr, targetPort);
                             udpSocket.send(outPkt);
                         } else if (clientUdpPort != -1) {
@@ -319,7 +347,7 @@ public class MainActivity extends Activity {
                             resp[9] = (byte) (packet.getPort() & 0xFF);
                             System.arraycopy(packet.getData(), 0, resp, 10, packet.getLength());
 
-                            bytesIn.addAndGet(packet.getLength()); // Считаем входящий трафик
+                            bytesIn.addAndGet(packet.getLength());
                             DatagramPacket backPkt = new DatagramPacket(resp, resp.length, clientIp, clientUdpPort);
                             udpSocket.send(backPkt);
                         }
@@ -343,7 +371,7 @@ public class MainActivity extends Activity {
                 while ((len = in.read(buf)) != -1) {
                     out.write(buf, 0, len);
                     out.flush();
-                    counter.addAndGet(len); // Считаем каждый байт
+                    counter.addAndGet(len);
                 }
             } catch (Exception ignored) {}
             try { src.close(); } catch (Exception ignored) {}

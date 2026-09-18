@@ -2,8 +2,7 @@ package com.netshare.app;
 
 import android.app.Activity;
 import android.graphics.Color;
-import android.net.wifi.p2p.WifiP2pGroup;
-import android.net.wifi.p2p.WifiP2pManager;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -25,17 +24,16 @@ public class MainActivity extends Activity {
 
     private boolean isRunning = false;
     private ServerSocket serverSocket;
-    private WifiP2pManager p2pManager;
-    private WifiP2pManager.Channel p2pChannel;
+    private WifiManager wifiManager;
+    private WifiManager.LocalOnlyHotspotReservation hotspotReservation;
 
     private TextView tvTitle, tvSsid, tvPass, tvProxy, tvConnected;
     private Button btnToggle;
     public static final int PORT = 1080;
 
-    // Счетчики трафика как в PdaNet
     private final AtomicLong bytesIn = new AtomicLong(0);
     private final AtomicLong bytesOut = new AtomicLong(0);
-    private String connectedClientIp = "Ожидание подключения...";
+    private String connectedClientIp = "Ожидание ПК...";
     private Handler uiHandler;
 
     @Override
@@ -43,11 +41,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         uiHandler = new Handler(Looper.getMainLooper());
-
-        p2pManager = (WifiP2pManager) getSystemService(WIFI_P2P_SERVICE);
-        if (p2pManager != null) {
-            p2pChannel = p2pManager.initialize(this, getMainLooper(), null);
-        }
+        wifiManager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             requestPermissions(new String[]{
@@ -56,7 +50,6 @@ public class MainActivity extends Activity {
             }, 1);
         }
 
-        // Интерфейс точно как синий блок в PdaNet
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(30, 40, 30, 30);
@@ -69,14 +62,13 @@ public class MainActivity extends Activity {
         appHeader.setPadding(0, 0, 0, 30);
         root.addView(appHeader);
 
-        // Синяя информационная панель PdaNet
         LinearLayout infoBox = new LinearLayout(this);
         infoBox.setOrientation(LinearLayout.VERTICAL);
         infoBox.setBackgroundColor(Color.parseColor("#0072C6"));
         infoBox.setPadding(30, 30, 30, 30);
 
         tvTitle = new TextView(this);
-        tvTitle.setText("Подключите ПК по Wi-Fi к:");
+        tvTitle.setText("Подключите ПК к сети Wi-Fi:");
         tvTitle.setTextColor(Color.WHITE);
         tvTitle.setTextSize(16);
         infoBox.addView(tvTitle);
@@ -96,13 +88,12 @@ public class MainActivity extends Activity {
         infoBox.addView(tvPass);
 
         tvProxy = new TextView(this);
-        tvProxy.setText("Proxy: 192.168.49.1 : " + PORT);
+        tvProxy.setText("Proxy IP: 192.168.43.1 : " + PORT);
         tvProxy.setTextColor(Color.parseColor("#D0E8FF"));
         tvProxy.setTextSize(15);
         tvProxy.setPadding(0, 0, 0, 15);
         infoBox.addView(tvProxy);
 
-        // Строка со счетчиком трафика
         tvConnected = new TextView(this);
         tvConnected.setText("Connected: Нет устройств - 0.00M/0.00M");
         tvConnected.setTextColor(Color.YELLOW);
@@ -112,7 +103,7 @@ public class MainActivity extends Activity {
         root.addView(infoBox);
 
         btnToggle = new Button(this);
-        btnToggle.setText("ВКЛЮЧИТЬ WIFI DIRECT");
+        btnToggle.setText("ВКЛЮЧИТЬ ХОТСПОТ");
         btnToggle.setTextSize(18);
         btnToggle.setBackgroundColor(Color.parseColor("#008000"));
         btnToggle.setTextColor(Color.WHITE);
@@ -130,7 +121,6 @@ public class MainActivity extends Activity {
             else stopAll();
         });
 
-        // Запуск таймера обновления счетчика трафика на экране (раз в секунду)
         uiHandler.postDelayed(new Runnable() {
             @Override
             public void run() {
@@ -152,80 +142,61 @@ public class MainActivity extends Activity {
         connectedClientIp = "Ожидание ПК...";
         btnToggle.setText("ОСТАНОВИТЬ");
         btnToggle.setBackgroundColor(Color.RED);
-        tvSsid.setText("Инициализация сети чипом...");
+        tvSsid.setText("Запуск реального Wi-Fi...");
 
-        // 1. Создаем заводскую сеть Wi-Fi Direct
-        startNativeWifiDirect();
+        // 1. Запуск настоящего открытого хотспота через систему Android
+        startRealHotspot();
 
-        // 2. Запускаем сервер
+        // 2. Запуск сервера
         startProxyServer();
     }
 
-    private void startNativeWifiDirect() {
-        if (p2pManager == null || p2pChannel == null) {
-            tvSsid.setText("Ошибка: Wi-Fi чип недоступен");
-            return;
-        }
+    private void startRealHotspot() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                wifiManager.startLocalOnlyHotspot(new WifiManager.LocalOnlyHotspotCallback() {
+                    @Override
+                    public void onStarted(WifiManager.LocalOnlyHotspotReservation reservation) {
+                        hotspotReservation = reservation;
+                        String ssid = "";
+                        String pass = "";
 
-        // 1. Сбрасываем старые зависшие группы перед новым стартом
-        p2pManager.removeGroup(p2pChannel, new WifiP2pManager.ActionListener() {
-            @Override
-            public void onSuccess() { createActualGroup(); }
-            @Override
-            public void onFailure(int reason) { createActualGroup(); }
-        });
-    }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            ssid = reservation.getSoftApConfiguration().getSsid();
+                            pass = reservation.getSoftApConfiguration().getPassphrase();
+                        } else {
+                            ssid = reservation.getWifiConfiguration().SSID;
+                            pass = reservation.getWifiConfiguration().preSharedKey;
+                        }
 
-    private void createActualGroup() {
-        // 2. Создаем новую заводскую группу
-        p2pManager.createGroup(p2pChannel, new WifiP2pManager.ActionListener() {
-            @Override
-            public void onSuccess() {
-                tvSsid.setText("Сеть создается чипом...");
-                // Даем 1-2 секунды чипу сгенерировать имя и пароль, затем считываем
-                queryGroupInfoWithRetry(0);
-            }
-
-            @Override
-            public void onFailure(int reason) {
-                String error = "Сбой создания: код " + reason;
-                if (reason == 2) error = "Сбой: Wi-Fi занят (выключите и включите Wi-Fi)";
-                tvSsid.setText(error);
-            }
-        });
-    }
-
-    // Опрашиваем систему каждые 800мс, пока чип не выдаст имя и пароль
-    private void queryGroupInfoWithRetry(int attempt) {
-        if (!isRunning) return;
-
-        uiHandler.postDelayed(() -> {
-            p2pManager.requestGroupInfo(p2pChannel, new WifiP2pManager.GroupInfoListener() {
-                @Override
-                public void onGroupInfoAvailable(WifiP2pGroup group) {
-                    if (group != null && group.getNetworkName() != null) {
-                        tvSsid.setText("Имя: " + group.getNetworkName());
-                        tvPass.setText("Пароль: " + group.getPassphrase());
-                    } else if (attempt < 8 && isRunning) {
-                        queryGroupInfoWithRetry(attempt + 1);
-                    } else {
-                        tvSsid.setText("Сеть активна (проверьте список сетей ПК)");
+                        tvSsid.setText("Имя: " + ssid);
+                        tvPass.setText("Пароль: " + pass);
                     }
-                }
-            });
-        }, 800);
+
+                    @Override
+                    public void onFailed(int reason) {
+                        tvSsid.setText("Сбой запуска: код " + reason);
+                    }
+                }, new Handler(Looper.getMainLooper()));
+            } catch (Exception e) {
+                tvSsid.setText("Ошибка: " + e.getMessage());
+            }
+        } else {
+            tvSsid.setText("Требуется Android 8.0+");
+        }
     }
 
     private void stopAll() {
         isRunning = false;
-        btnToggle.setText("ВКЛЮЧИТЬ WIFI DIRECT");
+        btnToggle.setText("ВКЛЮЧИТЬ ХОТСПОТ");
         btnToggle.setBackgroundColor(Color.parseColor("#008000"));
         tvSsid.setText("Имя: нажмите Запуск");
         tvPass.setText("Пароль: —");
         tvConnected.setText("Connected: Остановлен");
 
-        if (p2pManager != null && p2pChannel != null) {
-            p2pManager.removeGroup(p2pChannel, null);
+        if (hotspotReservation != null) {
+            hotspotReservation.close();
+            hotspotReservation = null;
         }
 
         try {

@@ -3,224 +3,116 @@ package com.netshare.app;
 import android.app.Activity;
 import android.graphics.Color;
 import android.net.wifi.WifiManager;
-import android.os.Build;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
+import android.text.format.Formatter;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.DatagramPacket;
-import java.net.DatagramSocket;
-import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class MainActivity extends Activity {
 
     private boolean isRunning = false;
     private ServerSocket serverSocket;
-    private WifiManager wifiManager;
-    private WifiManager.LocalOnlyHotspotReservation hotspotReservation;
-
-    private TextView tvTitle, tvSsid, tvPass, tvProxy, tvConnected;
+    private TextView tvStatus, tvIp;
     private Button btnToggle;
-    public static final int PORT = 1080;
-
-    private final AtomicLong bytesIn = new AtomicLong(0);
-    private final AtomicLong bytesOut = new AtomicLong(0);
-    private String connectedClientIp = "Ожидание ПК...";
-    private Handler uiHandler;
+    public static final int PORT = 8000; // Стандартный порт PdaNet
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        uiHandler = new Handler(Looper.getMainLooper());
-        wifiManager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(50, 60, 50, 40);
+        layout.setBackgroundColor(Color.parseColor("#121212"));
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            requestPermissions(new String[]{
-                    "android.permission.ACCESS_FINE_LOCATION",
-                    "android.permission.NEARBY_WIFI_DEVICES"
-            }, 1);
-        }
+        TextView title = new TextView(this);
+        title.setText("NetShare Server");
+        title.setTextSize(24);
+        title.setTextColor(Color.WHITE);
+        layout.addView(title);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(30, 40, 30, 30);
-        root.setBackgroundColor(Color.parseColor("#121212"));
+        tvStatus = new TextView(this);
+        tvStatus.setText("Статус: Остановлен");
+        tvStatus.setTextSize(18);
+        tvStatus.setTextColor(Color.LTGRAY);
+        tvStatus.setPadding(0, 30, 0, 10);
+        layout.addView(tvStatus);
 
-        TextView appHeader = new TextView(this);
-        appHeader.setText("NetShare Direct");
-        appHeader.setTextSize(24);
-        appHeader.setTextColor(Color.WHITE);
-        appHeader.setPadding(0, 0, 0, 30);
-        root.addView(appHeader);
-
-        LinearLayout infoBox = new LinearLayout(this);
-        infoBox.setOrientation(LinearLayout.VERTICAL);
-        infoBox.setBackgroundColor(Color.parseColor("#0072C6"));
-        infoBox.setPadding(30, 30, 30, 30);
-
-        tvTitle = new TextView(this);
-        tvTitle.setText("Подключите ПК к сети Wi-Fi:");
-        tvTitle.setTextColor(Color.WHITE);
-        tvTitle.setTextSize(16);
-        infoBox.addView(tvTitle);
-
-        tvSsid = new TextView(this);
-        tvSsid.setText("Имя: нажмите Запуск");
-        tvSsid.setTextColor(Color.WHITE);
-        tvSsid.setTextSize(18);
-        tvSsid.setPadding(0, 10, 0, 5);
-        infoBox.addView(tvSsid);
-
-        tvPass = new TextView(this);
-        tvPass.setText("Пароль: —");
-        tvPass.setTextColor(Color.WHITE);
-        tvPass.setTextSize(18);
-        tvPass.setPadding(0, 0, 0, 5);
-        infoBox.addView(tvPass);
-
-        tvProxy = new TextView(this);
-        tvProxy.setText("Proxy IP: 192.168.43.1 : " + PORT);
-        tvProxy.setTextColor(Color.parseColor("#D0E8FF"));
-        tvProxy.setTextSize(15);
-        tvProxy.setPadding(0, 0, 0, 15);
-        infoBox.addView(tvProxy);
-
-        tvConnected = new TextView(this);
-        tvConnected.setText("Connected: Нет устройств - 0.00M/0.00M");
-        tvConnected.setTextColor(Color.YELLOW);
-        tvConnected.setTextSize(15);
-        infoBox.addView(tvConnected);
-
-        root.addView(infoBox);
+        tvIp = new TextView(this);
+        tvIp.setText("IP: —");
+        tvIp.setTextSize(16);
+        tvIp.setTextColor(Color.parseColor("#00B0FF"));
+        tvIp.setPadding(0, 0, 0, 40);
+        layout.addView(tvIp);
 
         btnToggle = new Button(this);
-        btnToggle.setText("ВКЛЮЧИТЬ ХОТСПОТ");
+        btnToggle.setText("ЗАПУСТИТЬ РАЗДАЧУ");
         btnToggle.setTextSize(18);
-        btnToggle.setBackgroundColor(Color.parseColor("#008000"));
+        btnToggle.setBackgroundColor(Color.parseColor("#007ACC"));
         btnToggle.setTextColor(Color.WHITE);
 
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 150);
-        btnParams.setMargins(0, 50, 0, 0);
-        btnToggle.setLayoutParams(btnParams);
-        root.addView(btnToggle);
+        btnToggle.setLayoutParams(params);
+        layout.addView(btnToggle);
 
-        setContentView(root);
+        setContentView(layout);
 
         btnToggle.setOnClickListener(v -> {
-            if (!isRunning) startAll();
-            else stopAll();
+            if (!isRunning) startServer();
+            else stopServer();
         });
-
-        uiHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (isRunning) {
-                    double mbIn = bytesIn.get() / (1024.0 * 1024.0);
-                    double mbOut = bytesOut.get() / (1024.0 * 1024.0);
-                    String stat = String.format("Connected: %s - %.2fM/%.2fM", connectedClientIp, mbIn, mbOut);
-                    tvConnected.setText(stat);
-                }
-                uiHandler.postDelayed(this, 1000);
-            }
-        }, 1000);
     }
 
-    private void startAll() {
+    private void startServer() {
         isRunning = true;
-        bytesIn.set(0);
-        bytesOut.set(0);
-        connectedClientIp = "Ожидание ПК...";
         btnToggle.setText("ОСТАНОВИТЬ");
         btnToggle.setBackgroundColor(Color.RED);
-        tvSsid.setText("Запуск реального Wi-Fi...");
-
-        // 1. Запуск настоящего открытого хотспота через систему Android
-        startRealHotspot();
-
-        // 2. Запуск сервера
-        startProxyServer();
-    }
-
-    private void startRealHotspot() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                wifiManager.startLocalOnlyHotspot(new WifiManager.LocalOnlyHotspotCallback() {
-                    @Override
-                    public void onStarted(WifiManager.LocalOnlyHotspotReservation reservation) {
-                        hotspotReservation = reservation;
-                        String ssid = "";
-                        String pass = "";
-
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                            ssid = reservation.getSoftApConfiguration().getSsid();
-                            pass = reservation.getSoftApConfiguration().getPassphrase();
-                        } else {
-                            ssid = reservation.getWifiConfiguration().SSID;
-                            pass = reservation.getWifiConfiguration().preSharedKey;
-                        }
-
-                        tvSsid.setText("Имя: " + ssid);
-                        tvPass.setText("Пароль: " + pass);
-                    }
-
-                    @Override
-                    public void onFailed(int reason) {
-                        tvSsid.setText("Сбой запуска: код " + reason);
-                    }
-                }, new Handler(Looper.getMainLooper()));
-            } catch (Exception e) {
-                tvSsid.setText("Ошибка: " + e.getMessage());
-            }
-        } else {
-            tvSsid.setText("Требуется Android 8.0+");
-        }
-    }
-
-    private void stopAll() {
-        isRunning = false;
-        btnToggle.setText("ВКЛЮЧИТЬ ХОТСПОТ");
-        btnToggle.setBackgroundColor(Color.parseColor("#008000"));
-        tvSsid.setText("Имя: нажмите Запуск");
-        tvPass.setText("Пароль: —");
-        tvConnected.setText("Connected: Остановлен");
-
-        if (hotspotReservation != null) {
-            hotspotReservation.close();
-            hotspotReservation = null;
-        }
+        tvStatus.setText("Статус: РАБОТАЕТ (Порт " + PORT + ")");
+        tvStatus.setTextColor(Color.GREEN);
 
         try {
-            if (serverSocket != null && !serverSocket.isClosed()) serverSocket.close();
-        } catch (Exception ignored) {}
-    }
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            String ip = Formatter.formatIpAddress(wm.getConnectionInfo().getIpAddress());
+            if (ip.equals("0.0.0.0")) ip = "192.168.49.1 / 192.168.43.1";
+            tvIp.setText("IP для подключения: " + ip);
+        } catch (Exception e) {
+            tvIp.setText("IP: режим USB / Точка доступа");
+        }
 
-    private void startProxyServer() {
         new Thread(() -> {
             try {
                 serverSocket = new ServerSocket(PORT);
                 while (isRunning) {
                     Socket client = serverSocket.accept();
-                    connectedClientIp = client.getInetAddress().getHostAddress();
-                    new Thread(new SocksHandler(client)).start();
+                    new Thread(new TunnelHandler(client)).start();
                 }
             } catch (Exception ignored) {}
         }).start();
     }
 
-    private class SocksHandler implements Runnable {
+    private void stopServer() {
+        isRunning = false;
+        btnToggle.setText("ЗАПУСТИТЬ РАЗДАЧУ");
+        btnToggle.setBackgroundColor(Color.parseColor("#007ACC"));
+        tvStatus.setText("Статус: Остановлен");
+        tvStatus.setTextColor(Color.LTGRAY);
+        try {
+            if (serverSocket != null) serverSocket.close();
+        } catch (Exception ignored) {}
+    }
+
+    // Обработчик туннеля HTTP и защищенного HTTPS CONNECT
+    private static class TunnelHandler implements Runnable {
         private final Socket client;
 
-        public SocksHandler(Socket client) {
+        public TunnelHandler(Socket client) {
             this.client = client;
         }
 
@@ -230,123 +122,70 @@ public class MainActivity extends Activity {
                 InputStream in = client.getInputStream();
                 OutputStream out = client.getOutputStream();
 
-                int ver = in.read();
-                if (ver != 5) { client.close(); return; }
-                int nmethods = in.read();
-                byte[] methods = new byte[nmethods];
-                in.read(methods);
-                out.write(new byte[]{0x05, 0x00});
-                out.flush();
+                byte[] buf = new byte[8192];
+                int read = in.read(buf);
+                if (read <= 0) { client.close(); return; }
 
-                in.read(); // ver
-                int cmd = in.read(); // 0x01: TCP, 0x03: UDP
-                in.read(); // rsv
-                int atyp = in.read();
+                String req = new String(buf, 0, read);
+                String[] lines = req.split("\r\n");
+                if (lines.length == 0) { client.close(); return; }
 
-                if (cmd == 0x01) {
-                    String host = readHost(in, atyp);
-                    int port = ((in.read() & 0xFF) << 8) | (in.read() & 0xFF);
+                String[] parts = lines[0].split(" ");
+                if (parts.length < 2) { client.close(); return; }
+
+                String method = parts[0];
+                String target = parts[1];
+
+                String host;
+                int port = 80;
+
+                if (method.equalsIgnoreCase("CONNECT")) {
+                    // HTTPS туннель (Сайты, INCY VPN, мессенджеры)
+                    String[] hp = target.split(":");
+                    host = hp[0];
+                    if (hp.length > 1) port = Integer.parseInt(hp[1]);
 
                     Socket remote = new Socket(host, port);
-                    out.write(new byte[]{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0});
+                    out.write("HTTP/1.1 200 Connection Established\r\n\r\n".getBytes());
                     out.flush();
+
                     pipe(client, remote);
-                } else if (cmd == 0x03) {
-                    DatagramSocket udpSocket = new DatagramSocket();
-                    int localUdpPort = udpSocket.getLocalPort();
-                    byte[] bndPort = new byte[]{(byte) (localUdpPort >> 8), (byte) (localUdpPort & 0xFF)};
-                    out.write(new byte[]{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, bndPort[0], bndPort[1]});
-                    out.flush();
-                    handleUdpRelay(client, udpSocket);
                 } else {
-                    client.close();
+                    // Обычный HTTP
+                    if (target.startsWith("http://")) target = target.substring(7);
+                    int slash = target.indexOf('/');
+                    if (slash > 0) target = target.substring(0, slash);
+                    String[] hp = target.split(":");
+                    host = hp[0];
+                    if (hp.length > 1) port = Integer.parseInt(hp[1]);
+
+                    Socket remote = new Socket(host, port);
+                    remote.getOutputStream().write(buf, 0, read);
+                    pipe(client, remote);
                 }
             } catch (Exception ignored) {
                 try { client.close(); } catch (Exception ignored2) {}
             }
         }
 
-        private String readHost(InputStream in, int atyp) throws Exception {
-            if (atyp == 0x01) {
-                byte[] ip = new byte[4];
-                in.read(ip);
-                return InetAddress.getByAddress(ip).getHostAddress();
-            } else if (atyp == 0x03) {
-                int len = in.read();
-                byte[] host = new byte[len];
-                in.read(host);
-                return new String(host);
-            }
-            throw new Exception("Unknown ATYP");
-        }
-
-        private void handleUdpRelay(Socket controlSocket, DatagramSocket udpSocket) {
-            new Thread(() -> {
-                try {
-                    byte[] buf = new byte[65535];
-                    InetAddress clientIp = controlSocket.getInetAddress();
-                    int clientUdpPort = -1;
-
-                    while (!controlSocket.isClosed()) {
-                        DatagramPacket packet = new DatagramPacket(buf, buf.length);
-                        udpSocket.receive(packet);
-
-                        if (packet.getAddress().equals(clientIp)) {
-                            clientUdpPort = packet.getPort();
-                            if (buf[2] != 0) continue;
-                            int atyp = buf[3];
-                            int offset = 4;
-                            InetAddress targetAddr;
-                            if (atyp == 0x01) {
-                                targetAddr = InetAddress.getByAddress(Arrays.copyOfRange(buf, offset, offset + 4));
-                                offset += 4;
-                            } else continue;
-
-                            int targetPort = ((buf[offset] & 0xFF) << 8) | (buf[offset + 1] & 0xFF);
-                            offset += 2;
-
-                            int payloadLen = packet.getLength() - offset;
-                            bytesOut.addAndGet(payloadLen);
-                            DatagramPacket outPkt = new DatagramPacket(buf, offset, payloadLen, targetAddr, targetPort);
-                            udpSocket.send(outPkt);
-                        } else if (clientUdpPort != -1) {
-                            byte[] resp = new byte[packet.getLength() + 10];
-                            resp[0] = 0; resp[1] = 0; resp[2] = 0; resp[3] = 1;
-                            byte[] rawIp = packet.getAddress().getAddress();
-                            System.arraycopy(rawIp, 0, resp, 4, 4);
-                            resp[8] = (byte) (packet.getPort() >> 8);
-                            resp[9] = (byte) (packet.getPort() & 0xFF);
-                            System.arraycopy(packet.getData(), 0, resp, 10, packet.getLength());
-
-                            bytesIn.addAndGet(packet.getLength());
-                            DatagramPacket backPkt = new DatagramPacket(resp, resp.length, clientIp, clientUdpPort);
-                            udpSocket.send(backPkt);
-                        }
-                    }
-                } catch (Exception ignored) {}
-                finally { udpSocket.close(); }
-            }).start();
-        }
-
         private void pipe(Socket a, Socket b) {
-            new Thread(() -> forward(a, b, bytesOut)).start();
-            forward(b, a, bytesIn);
+            new Thread(() -> forward(a, b)).start();
+            forward(b, a);
         }
 
-        private void forward(Socket src, Socket dst, AtomicLong counter) {
+        private void forward(Socket src, Socket dst) {
             try {
-                byte[] buf = new byte[32768];
+                byte[] b = new byte[16384];
                 InputStream in = src.getInputStream();
                 OutputStream out = dst.getOutputStream();
                 int len;
-                while ((len = in.read(buf)) != -1) {
-                    out.write(buf, 0, len);
+                while ((len = in.read(b)) != -1) {
+                    out.write(b, 0, len);
                     out.flush();
-                    counter.addAndGet(len);
                 }
             } catch (Exception ignored) {}
-            try { src.close(); } catch (Exception ignored) {}
-            try { dst.close(); } catch (Exception ignored) {}
+            try { src.close(); } catch (Exception ignored2) {}
+            try { dst.close(); } catch (Exception ignored2) {}
         }
     }
 }

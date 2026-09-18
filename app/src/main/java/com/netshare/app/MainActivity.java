@@ -2,12 +2,14 @@ package com.netshare.app;
 
 import android.app.Activity;
 import android.graphics.Color;
-import android.net.wifi.p2p.WifiP2pConfig;
+import android.net.wifi.p2p.WifiP2pGroup;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import java.io.InputStream;
@@ -18,6 +20,7 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class MainActivity extends Activity {
 
@@ -25,15 +28,22 @@ public class MainActivity extends Activity {
     private ServerSocket serverSocket;
     private WifiP2pManager p2pManager;
     private WifiP2pManager.Channel p2pChannel;
-    
-    private TextView tvStatus;
-    private EditText etSsid, etPassword;
+
+    private TextView tvTitle, tvSsid, tvPass, tvProxy, tvConnected;
     private Button btnToggle;
     public static final int PORT = 1080;
+
+    // Счетчики трафика как в PdaNet
+    private final AtomicLong bytesIn = new AtomicLong(0);
+    private final AtomicLong bytesOut = new AtomicLong(0);
+    private String connectedClientIp = "Ожидание подключения...";
+    private Handler uiHandler;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        uiHandler = new Handler(Looper.getMainLooper());
 
         p2pManager = (WifiP2pManager) getSystemService(WIFI_P2P_SERVICE);
         if (p2pManager != null) {
@@ -47,115 +57,144 @@ public class MainActivity extends Activity {
             }, 1);
         }
 
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(50, 60, 50, 40);
+        // Интерфейс точно как синий блок в PdaNet
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(30, 40, 30, 30);
+        root.setBackgroundColor(Color.parseColor("#121212"));
 
-        TextView title = new TextView(this);
-        title.setText("NetShare Pro (Безлимит)");
-        title.setTextSize(22);
-        title.setTextColor(Color.BLACK);
-        layout.addView(title);
+        TextView appHeader = new TextView(this);
+        appHeader.setText("NetShare Direct");
+        appHeader.setTextSize(24);
+        appHeader.setTextColor(Color.WHITE);
+        appHeader.setPadding(0, 0, 0, 30);
+        root.addView(appHeader);
 
-        tvStatus = new TextView(this);
-        tvStatus.setText("Статус: Остановлен");
-        tvStatus.setTextSize(16);
-        tvStatus.setPadding(0, 20, 0, 30);
-        layout.addView(tvStatus);
+        // Синяя информационная панель
+        LinearLayout infoBox = new LinearLayout(this);
+        infoBox.setOrientation(LinearLayout.VERTICAL);
+        infoBox.setBackgroundColor(Color.parseColor("#0072C6")); // PdaNet Blue
+        infoBox.setPadding(30, 30, 30, 30);
 
-        TextView lblSsid = new TextView(this);
-        lblSsid.setText("Имя Wi-Fi сети (должно начинаться с DIRECT-):");
-        layout.addView(lblSsid);
+        tvTitle = new TextView(this);
+        tvTitle.setText("Подключите ПК по Wi-Fi к:");
+        tvTitle.setTextColor(Color.WHITE);
+        tvTitle.setTextSize(16);
+        infoBox.addView(tvTitle);
 
-        etSsid = new EditText(this);
-        etSsid.setText("DIRECT-NetShare");
-        layout.addView(etSsid);
+        tvSsid = new TextView(this);
+        tvSsid.setText("Имя: нажмите Запуск");
+        tvSsid.setTextColor(Color.WHITE);
+        tvSsid.setTextSize(18);
+        tvSsid.setPadding(0, 10, 0, 5);
+        infoBox.addView(tvSsid);
 
-        TextView lblPass = new TextView(this);
-        lblPass.setText("Пароль сети (минимум 8 символов):");
-        lblPass.setPadding(0, 20, 0, 0);
-        layout.addView(lblPass);
+        tvPass = new TextView(this);
+        tvPass.setText("Пароль: —");
+        tvPass.setTextColor(Color.WHITE);
+        tvPass.setTextSize(18);
+        tvPass.setPadding(0, 0, 0, 5);
+        infoBox.addView(tvPass);
 
-        etPassword = new EditText(this);
-        etPassword.setText("88888888");
-        layout.addView(etPassword);
+        tvProxy = new TextView(this);
+        tvProxy.setText("Proxy: 192.168.49.1 : " + PORT);
+        tvProxy.setTextColor(Color.parseColor("#D0E8FF"));
+        tvProxy.setTextSize(15);
+        tvProxy.setPadding(0, 0, 0, 15);
+        infoBox.addView(tvProxy);
+
+        // Строка со счетчиком трафика
+        tvConnected = new TextView(this);
+        tvConnected.setText("Connected: Нет устройств - 0.00M/0.00M");
+        tvConnected.setTextColor(Color.YELLOW);
+        tvConnected.setTextSize(15);
+        infoBox.addView(tvConnected);
+
+        root.addView(infoBox);
 
         btnToggle = new Button(this);
-        btnToggle.setText("ВКЛЮЧИТЬ РАЗДАЧУ");
+        btnToggle.setText("ВКЛЮЧИТЬ WIFI DIRECT");
         btnToggle.setTextSize(18);
-        btnToggle.setBackgroundColor(Color.parseColor("#007ACC"));
+        btnToggle.setBackgroundColor(Color.parseColor("#008000"));
         btnToggle.setTextColor(Color.WHITE);
-        
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 140);
-        params.setMargins(0, 50, 0, 0);
-        btnToggle.setLayoutParams(params);
-        layout.addView(btnToggle);
 
-        setContentView(layout);
+        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 150);
+        btnParams.setMargins(0, 50, 0, 0);
+        btnToggle.setLayoutParams(btnParams);
+        root.addView(btnToggle);
+
+        setContentView(root);
 
         btnToggle.setOnClickListener(v -> {
             if (!isRunning) startAll();
             else stopAll();
         });
+
+        // Запуск таймера обновления счетчика трафика на экране (раз в секунду)
+        uiHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (isRunning) {
+                    double mbIn = bytesIn.get() / (1024.0 * 1024.0);
+                    double mbOut = bytesOut.get() / (1024.0 * 1024.0);
+                    String stat = String.format("Connected: %s - %.2fM/%.2fM", connectedClientIp, mbIn, mbOut);
+                    tvConnected.setText(stat);
+                }
+                uiHandler.postDelayed(this, 1000);
+            }
+        }, 1000);
     }
 
     private void startAll() {
         isRunning = true;
+        bytesIn.set(0);
+        bytesOut.set(0);
+        connectedClientIp = "Ожидание ПК...";
         btnToggle.setText("ОСТАНОВИТЬ");
         btnToggle.setBackgroundColor(Color.RED);
-        tvStatus.setText("Запуск Wi-Fi Direct и SOCKS5...");
-        tvStatus.setTextColor(Color.parseColor("#008000"));
+        tvSsid.setText("Запуск заводской сети...");
 
-        startWifiDirectGroup();
-        startSocksServer();
+        // 1. Создаем сеть заводским методом (как PdaNet)
+        startNativeWifiDirect();
+
+        // 2. Запускаем высокоскоростной сервер
+        startProxyServer();
     }
 
-    private void startWifiDirectGroup() {
+    private void startNativeWifiDirect() {
         if (p2pManager == null || p2pChannel == null) return;
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
-                WifiP2pConfig config = new WifiP2pConfig.Builder()
-                        .setNetworkName(etSsid.getText().toString().trim())
-                        .setPassphrase(etPassword.getText().toString().trim())
-                        .build();
-
-                p2pManager.createGroup(p2pChannel, config, new WifiP2pManager.ActionListener() {
-                    @Override
-                    public void onSuccess() {
-                        tvStatus.setText("Сеть создана: " + etSsid.getText() + "\nIP: 192.168.49.1 : " + PORT);
-                    }
-                    @Override
-                    public void onFailure(int reason) {
-                        tvStatus.setText("Ошибка Wi-Fi Direct: " + reason + "\nСервер работает в режиме кабеля.");
-                    }
-                });
-            } catch (Exception e) {
-                fallbackCreateGroup();
-            }
-        } else {
-            fallbackCreateGroup();
-        }
-    }
-
-    private void fallbackCreateGroup() {
+        // Создаем группу БЕЗ принудительного конфига (чтобы чип сам включил маяк)
         p2pManager.createGroup(p2pChannel, new WifiP2pManager.ActionListener() {
             @Override
             public void onSuccess() {
-                tvStatus.setText("Wi-Fi Direct запущен!\nIP: 192.168.49.1 : " + PORT);
+                // Считываем заводское имя и пароль (как PdaNet)
+                p2pManager.requestGroupInfo(p2pChannel, new WifiP2pManager.GroupInfoListener() {
+                    @Override
+                    public void onGroupInfoAvailable(WifiP2pGroup group) {
+                        if (group != null) {
+                            tvSsid.setText("Имя: " + group.getNetworkName());
+                            tvPass.setText("Пароль: " + group.getPassphrase());
+                        }
+                    }
+                });
             }
+
             @Override
-            public void onFailure(int reason) {}
+            public void onFailure(int reason) {
+                tvSsid.setText("Сбой создания группы: " + reason);
+            }
         });
     }
 
     private void stopAll() {
         isRunning = false;
-        btnToggle.setText("ВКЛЮЧИТЬ РАЗДАЧУ");
-        btnToggle.setBackgroundColor(Color.parseColor("#007ACC"));
-        tvStatus.setText("Статус: Остановлен");
-        tvStatus.setTextColor(Color.BLACK);
+        btnToggle.setText("ВКЛЮЧИТЬ WIFI DIRECT");
+        btnToggle.setBackgroundColor(Color.parseColor("#008000"));
+        tvSsid.setText("Имя: нажмите Запуск");
+        tvPass.setText("Пароль: —");
+        tvConnected.setText("Connected: Остановлен");
 
         if (p2pManager != null && p2pChannel != null) {
             p2pManager.removeGroup(p2pChannel, null);
@@ -166,19 +205,20 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
-    private void startSocksServer() {
+    private void startProxyServer() {
         new Thread(() -> {
             try {
                 serverSocket = new ServerSocket(PORT);
                 while (isRunning) {
                     Socket client = serverSocket.accept();
+                    connectedClientIp = client.getInetAddress().getHostAddress();
                     new Thread(new SocksHandler(client)).start();
                 }
             } catch (Exception ignored) {}
         }).start();
     }
 
-    private static class SocksHandler implements Runnable {
+    private class SocksHandler implements Runnable {
         private final Socket client;
 
         public SocksHandler(Socket client) {
@@ -267,6 +307,7 @@ public class MainActivity extends Activity {
                             offset += 2;
 
                             int payloadLen = packet.getLength() - offset;
+                            bytesOut.addAndGet(payloadLen); // Считаем исходящий трафик
                             DatagramPacket outPkt = new DatagramPacket(buf, offset, payloadLen, targetAddr, targetPort);
                             udpSocket.send(outPkt);
                         } else if (clientUdpPort != -1) {
@@ -278,6 +319,7 @@ public class MainActivity extends Activity {
                             resp[9] = (byte) (packet.getPort() & 0xFF);
                             System.arraycopy(packet.getData(), 0, resp, 10, packet.getLength());
 
+                            bytesIn.addAndGet(packet.getLength()); // Считаем входящий трафик
                             DatagramPacket backPkt = new DatagramPacket(resp, resp.length, clientIp, clientUdpPort);
                             udpSocket.send(backPkt);
                         }
@@ -288,11 +330,11 @@ public class MainActivity extends Activity {
         }
 
         private void pipe(Socket a, Socket b) {
-            new Thread(() -> forward(a, b)).start();
-            forward(b, a);
+            new Thread(() -> forward(a, b, bytesOut)).start();
+            forward(b, a, bytesIn);
         }
 
-        private void forward(Socket src, Socket dst) {
+        private void forward(Socket src, Socket dst, AtomicLong counter) {
             try {
                 byte[] buf = new byte[32768];
                 InputStream in = src.getInputStream();
@@ -301,6 +343,7 @@ public class MainActivity extends Activity {
                 while ((len = in.read(buf)) != -1) {
                     out.write(buf, 0, len);
                     out.flush();
+                    counter.addAndGet(len); // Считаем каждый байт
                 }
             } catch (Exception ignored) {}
             try { src.close(); } catch (Exception ignored) {}
